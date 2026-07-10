@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 
+const API_BASE = import.meta.env.VITE_API_URL || "";
 export default function App() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
@@ -11,6 +12,8 @@ export default function App() {
   }, [messages]);
 
   async function sendMessage() {
+    console.log("API_BASE:", API_BASE);
+
     if (!input.trim() || loading) return;
 
     // Build the new message list — this is what gets sent to the backend.
@@ -22,7 +25,7 @@ export default function App() {
     setLoading(true);
 
     try {
-      const res = await fetch("/api/chat", {
+      const res = await fetch(`${API_BASE}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: newMessages }),
@@ -30,12 +33,21 @@ export default function App() {
       const data = await res.json();
 
       if (data.error) {
-        setMessages([...newMessages, { role: "assistant", content: `Error: ${data.error}` }]);
+        setMessages([
+          ...newMessages,
+          { role: "assistant", content: `Error: ${data.error}` },
+        ]);
       } else {
-        setMessages([...newMessages, { role: "assistant", content: data.reply }]);
+        setMessages([
+          ...newMessages,
+          { role: "assistant", content: data.reply },
+        ]);
       }
     } catch (err) {
-      setMessages([...newMessages, { role: "assistant", content: "Failed to reach server." }]);
+      setMessages([
+        ...newMessages,
+        { role: "assistant", content: "Failed to reach server." },
+      ]);
     } finally {
       setLoading(false);
     }
@@ -51,7 +63,8 @@ export default function App() {
       <div className="chat-messages">
         {messages.length === 0 && (
           <div style={{ color: "#999", fontSize: 14 }}>
-            Ask anything. This is a stateless chat calling Claude directly — no documents, no memory beyond this conversation.
+            Ask anything. This is a stateless chat calling Claude directly — no
+            documents, no memory beyond this conversation.
           </div>
         )}
         {messages.map((m, i) => (
