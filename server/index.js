@@ -16,7 +16,7 @@ app.use(express.json());
 const hf = new InferenceClient(process.env.HUGGINGFACE_API_KEY);
 app.use(
   cors({
-    origin: "https://vercel.app",
+    origin: "https://react-node-llm-chatbot.vercel.app",
     methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
