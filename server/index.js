@@ -14,7 +14,14 @@ app.use(cors());
 app.use(express.json());
 
 const hf = new InferenceClient(process.env.HUGGINGFACE_API_KEY);
-
+app.use(
+  cors({
+    origin: "https://vercel.app",
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true,
+  })
+);
 app.post("/api/chat", async (req, res) => {
   try {
     const { messages } = req.body;
