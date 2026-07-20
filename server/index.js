@@ -15,26 +15,10 @@ app.use(express.json());
 
 const hf = new InferenceClient(process.env.HUGGINGFACE_API_KEY);
 
-// ---------------------------------------------------------------------------
-// SESSION 2 CONCEPT: Embeddings
-// An embedding model turns text into a list of numbers (a vector) that
-// captures MEANING, not just words. Similar meanings -> similar vectors.
-// We use this to later find relevant chunks of a document for a question
-// (semantic search), without needing exact keyword matches.
-//
-// In-memory "vector store": just an array. In a real app this would be a
-// vector database (Pinecone, Weaviate, pgvector, etc.), but the underlying
-// idea is identical — store text + its embedding, then compare vectors later.
-// ---------------------------------------------------------------------------
 let documentStore = []; // [{ id, text, embedding }]
 
-// Splits a long document into smaller chunks. Why chunk at all? Two reasons:
-// 1) Embedding models have an input size limit.
-// 2) Smaller chunks give more precise retrieval later — if you embed a whole
-//    10-page document as ONE vector, you lose the ability to retrieve just
-//    the one paragraph that actually answers the question.
 function chunkText(text, chunkSize = 500) {
-  const sentences = text.split(/(?<=[.?!])\s+/); // split on sentence boundaries
+  const sentences = text.split(/(?<=[.?!])\s+/);
   const chunks = [];
   let current = "";
 
@@ -50,8 +34,6 @@ function chunkText(text, chunkSize = 500) {
 }
 
 async function embedText(text) {
-  // featureExtraction is HF's embeddings task. This model outputs a
-  // 384-number vector per input text.
   const result = await hf.featureExtraction({
     model: "sentence-transformers/all-MiniLM-L6-v2",
     inputs: text,
@@ -59,17 +41,36 @@ async function embedText(text) {
   return result;
 }
 
-// ---------------------------------------------------------------------------
-// CONCEPT 1: LLMs have NO memory between API calls.
-// Every call is stateless — the model only knows what's in THIS request's
-// `messages` array. That's why we send the full conversation history every
-// time, not just the newest message.
-// ---------------------------------------------------------------------------
+// SESSION 3 CONCEPT: Semantic search via cosine similarity.
+// Measures the angle between two vectors: 1 = identical meaning,
+// 0 = unrelated, -1 = opposite. This is how we find which stored chunk
+// best matches a question, without needing matching keywords.
+function cosineSimilarity(vecA, vecB) {
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < vecA.length; i++) {
+    dotProduct += vecA[i] * vecB[i];
+    normA += vecA[i] * vecA[i];
+    normB += vecB[i] * vecB[i];
+  }
+  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+async function searchDocuments(query, topK = 3) {
+  const queryEmbedding = await embedText(query);
+  const scored = documentStore.map((doc) => ({
+    id: doc.id,
+    text: doc.text,
+    score: cosineSimilarity(queryEmbedding, doc.embedding),
+  }));
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, topK);
+}
 
 app.post("/api/chat", async (req, res) => {
   try {
     const { messages } = req.body;
-
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: "messages array is required" });
     }
@@ -85,11 +86,7 @@ Answer clearly in plain language. Keep responses under 150 words unless asked fo
     });
 
     const reply = response.choices?.[0]?.message?.content ?? "";
-
-    res.json({
-      reply,
-      usage: response.usage,
-    });
+    res.json({ reply, usage: response.usage });
   } catch (err) {
     if (err instanceof InferenceClientProviderApiError) {
       console.error("Provider API Error:", err.message);
@@ -108,9 +105,6 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
-// -----------------------------------------------------------------------
-// Test endpoint: send raw text, get back its embedding vector.
-// -----------------------------------------------------------------------
 app.post("/api/embed", async (req, res) => {
   try {
     const { text } = req.body;
@@ -128,11 +122,6 @@ app.post("/api/embed", async (req, res) => {
   }
 });
 
-// -----------------------------------------------------------------------
-// Add a document to our in-memory knowledge base: chunk it, embed each
-// chunk, store it. This is step 1 of RAG (indexing). Step 2 (retrieval)
-// comes in Session 3.
-// -----------------------------------------------------------------------
 app.post("/api/documents", async (req, res) => {
   try {
     const { text } = req.body;
@@ -160,6 +149,27 @@ app.get("/api/documents", (req, res) => {
     count: documentStore.length,
     documents: documentStore.map((d) => ({ id: d.id, text: d.text })),
   });
+});
+
+app.post("/api/search", async (req, res) => {
+  try {
+    const { query, topK } = req.body;
+    if (!query) return res.status(400).json({ error: "query is required" });
+
+    if (documentStore.length === 0) {
+      return res.json({
+        query,
+        results: [],
+        message: "Knowledge base is empty — add some documents first.",
+      });
+    }
+
+    const results = await searchDocuments(query, topK || 3);
+    res.json({ query, results });
+  } catch (err) {
+    console.error("Search error:", err.message);
+    res.status(500).json({ error: "Failed to perform search." });
+  }
 });
 
 const PORT = process.env.PORT || 3001;
